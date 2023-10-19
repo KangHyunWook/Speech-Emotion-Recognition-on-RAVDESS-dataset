@@ -1,3 +1,6 @@
+from config import get_config
+
+from utils import *
 from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings('ignore')
@@ -10,7 +13,6 @@ from sklearn.metrics import f1_score
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import roc_curve
 from sklearn.metrics import auc
-import os
 
 import pickle
 import tensorflow as tf
@@ -40,16 +42,6 @@ enable_penalty = True
 rnn_suffix        =".mat_win_128_rnn_dataset.pkl"
 label_suffix    =".mat_win_128_labels.pkl"
 
-def getPathList(root):
-    items = os.listdir(root)
-    pathList=[]
-    for item in items:
-        full_path = os.path.join(root, item)
-        if os.path.isfile(full_path):
-            pathList.append(full_path)
-        else:
-            pathList.extend(getPathList(full_path))
-    return pathList
 
 '''
 load seed dataset of shape (128,9,9)
@@ -60,27 +52,11 @@ seed_dataset_path=r'/home/hyunwook_kang/SEED/ExtractedFeatures'
 
 all_files = getPathList(seed_dataset_path)
 
-file_map = {}
-
-for path in all_files:
-
-    splits = path.split(os.path.sep)
-    fn=splits[-1]
-    if fn in ['readme.txt', 'label.mat']:
-        continue
-    current_subject = fn.split('_')[0]
-
-    if current_subject not in file_map:
-        file_map[current_subject] = []
-    file_map[current_subject].append(path)
-
+file_map = getSubFileMap(all_files)
+#todo:
 true_labels=scio.loadmat(r'/home/hyunwook_kang/SEED/ExtractedFeatures/label.mat')['label'][0]
 
-
-
-
-print("**********(" + time.asctime(time.localtime(time.time())) + ") Load and Split dataset End **********\n")
-print("**********(" + time.asctime(time.localtime(time.time())) + ") Define parameters and functions Begin: **********\n")
+train_config = get_config()
 
 # input parameter
 n_input_ele = 310
@@ -92,14 +68,9 @@ n_labels = 3
 lambda_loss_amount = 0.5
 training_epochs = 500
 
-batch_size = 64
-
 # kernel parameter
-kernel_height_1st = 4
-kernel_width_1st = 4
 
-kernel_height_2nd = 4
-kernel_width_2nd = 4
+
 
 kernel_height_3rd = 4
 kernel_width_3rd = 4
@@ -132,8 +103,11 @@ def apply_max_pooling(x, pooling_height, pooling_width, pooling_stride):
                           strides=[1, pooling_stride, pooling_stride, 1], padding='SAME')
 
 def apply_fully_connect(x, x_size, fc_size):
-    fc_weight = weight_variable([x_size, fc_size])
+    
+    initial = tf.truncated_normal([x_size, fc_size], stddev=0.1)
+    fc_weight = tf.Variable(initial)
     fc_bias = bias_variable([fc_size])
+    
     return tf.nn.elu(tf.add(tf.matmul(x, fc_weight), fc_bias))
 
 def apply_readout(x, x_size, readout_size):
@@ -142,9 +116,6 @@ def apply_readout(x, x_size, readout_size):
     # print('r2:', readout_bias.shape)
     # exit()
     return tf.add(tf.matmul(x, readout_weight), readout_bias)
-
-# input placeholder
-cnn_in = tf.placeholder(tf.float32, shape=[None, input_height, input_width, input_channel_num], name='cnn_in')
 
 Y = tf.placeholder(tf.float32, shape=[None, n_labels], name='Y')
 keep_prob = tf.placeholder(tf.float32, name='keep_prob')
@@ -217,7 +188,6 @@ val_writer = tf.summary.FileWriter("log/"+logdir+"/val")
 test_writer = tf.summary.FileWriter("log/"+logdir+"/test")
 
 # set test batch number per epoch
-accuracy_batch_size = batch_size
 
 subject_peak_acc ={}
 for subject in range(1,16):
@@ -228,7 +198,7 @@ for subject in range(1,16):
 
     train_y=[]
     test_y=[]
-
+  
     for file in file_map[subject]:
         seed_data = scio.loadmat(file)
         for trial in range(1, 16):
@@ -251,9 +221,9 @@ for subject in range(1,16):
     #todo: split train validation
    
     train_x, val_x, train_y, val_y = train_test_split(train_x, train_y, test_size=0.3, random_state=7)
-    batch_num_per_epoch = math.floor(train_x.shape[0]/batch_size)+ 1
-    val_accuracy_batch_num = math.floor(val_x.shape[0]/batch_size)+1
-    test_accuracy_batch_num = math.floor(test_x.shape[0]/batch_size)+ 1        
+    batch_num_per_epoch = math.floor(train_x.shape[0]/train_config. batch_size)+ 1
+    val_accuracy_batch_num = math.floor(val_x.shape[0]/train_config.batch_size)+1
+    test_accuracy_batch_num = math.floor(test_x.shape[0]/train_config.batch_size)+ 1        
     best_val_loss=float('inf')
     with tf.Session(config=config) as session:
         print(f'================subject{subject}==================')
@@ -273,11 +243,11 @@ for subject in range(1,16):
             val_loss = np.zeros(shape=[0], dtype=float)
             
             for b in range(batch_num_per_epoch):
-                start = b * batch_size
-                if (b+1)*batch_size>train_y.shape[0]:
-                    offset = train_y.shape[0] % batch_size
+                start = b * train_config.batch_size
+                if (b+1)*train_config.batch_size>train_y.shape[0]:
+                    offset = train_y.shape[0] % train_config.batch_size
                 else:
-                    offset = batch_size
+                    offset = train_config.batch_size
                 batch = train_x[start:(start+offset), :]
                 
                 rnn_batch=[]
@@ -296,11 +266,11 @@ for subject in range(1,16):
                 
             
             for i in range(val_accuracy_batch_num):
-                start = i* batch_size
-                if (i+1)*batch_size>val_y.shape[0]:
-                    offset = val_y.shape[0] % batch_size
+                start = i* train_config.batch_size
+                if (i+1)*train_config.batch_size>val_y.shape[0]:
+                    offset = val_y.shape[0] % train_config.batch_size
                 else:
-                    offset = batch_size
+                    offset = train_config.batch_size
             
                 val_batch = val_x[start:(start + offset), :]
                 
@@ -315,7 +285,7 @@ for subject in range(1,16):
                 val_batch_y = val_y[start:(start + offset), :]
 
                 tf_summary, val_a, val_c = session.run([merged,accuracy, cost],
-                                               feed_dict={cnn_in: val_cnn_batch, rnn_in: 
+                                               feed_dict={rnn_in: 
                                                 val_rnn_batch,
                                                   Y: val_batch_y, keep_prob: 1.0, 
                                                             phase_train: False})
@@ -333,12 +303,12 @@ for subject in range(1,16):
             if np.mean(val_loss) < best_val_loss:
                 best_val_loss=np.mean(val_loss)
                 for j in range(test_accuracy_batch_num):
-                    start = j * batch_size
+                    start = j * train_config.batch_size
            
-                    if (j+1)*batch_size>test_y.shape[0]:
-                        offset = test_y.shape[0] % batch_size
+                    if (j+1)*train_config.batch_size>test_y.shape[0]:
+                        offset = test_y.shape[0] % train_config.batch_size
                     else:
-                        offset = batch_size
+                        offset = train_config.batch_size
                     test_batch = test_x[start:(start + offset), :]
 
                     test_cnn_batch=[]
@@ -352,7 +322,7 @@ for subject in range(1,16):
                     test_batch_y = test_y[start:(start + offset), :]
                     
                     tf_test_summary,test_a, test_c = session.run([merged,accuracy, cost],
-                                                 feed_dict={cnn_in: test_cnn_batch, rnn_in: 
+                                                 feed_dict={rnn_in: 
                                                  test_rnn_batch,Y: test_batch_y,
                                                             keep_prob: 1.0, phase_train: False})
                     test_writer.add_summary(tf_test_summary,test_count_accuracy)
